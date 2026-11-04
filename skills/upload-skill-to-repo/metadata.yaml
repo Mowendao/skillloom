@@ -1,0 +1,15 @@
+name: upload-skill-to-repo
+version: 1.0.0
+summary: "把一个已安装的 skill（按名字从 DSH 的 skill 根目录查找，默认全局 ~/."
+author: "Mowendao"
+license: MIT
+tags:
+  - skills
+status: beta
+requires: []
+platforms:
+  - windows
+  - macos
+  - linux
+entrypoint: SKILL.md
+source: ""
