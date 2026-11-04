@@ -1,0 +1,23 @@
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+
+# Runtimes and dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Temporary artifacts
+*.tmp
+*.temp
+~$*
+*.crdownload
+*.part
+.organize-record/

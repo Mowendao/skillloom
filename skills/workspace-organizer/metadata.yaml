@@ -1,0 +1,16 @@
+name: workspace-organizer
+version: 1.0.0
+summary: "统一文件读写、目录整理、命名与自检"
+author: "Mowendao"
+license: MIT
+tags:
+  - files
+  - organization
+  - workflow
+  - self-check
+status: stable
+requires: []
+platforms:
+  - windows
+entrypoint: SKILL.md
+source: "https://github.com/Mowendao/skillloom"
