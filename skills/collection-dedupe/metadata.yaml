@@ -1,10 +1,11 @@
 name: collection-dedupe
 version: 1.0.0
-summary: "把网页收藏夹/合集/列表页的条目导出成 CSV，解析出原名、社团、编号等字段并聚类判定\\"同款\\"，输出带分组、判定依据、建议动作和待核清单的 xlsx。"
-author: "unknown"
+summary: "把网页收藏夹/合集/列表页的条目导出成 CSV，解析原名、社团、编号等字段并聚类判定「同款」，输出带分组、判定依据、建议动作和待核清单的 xlsx。"
+author: "Mowendao"
 license: MIT
 tags:
   - skills
+  - dedupe
 status: beta
 requires: []
 platforms:

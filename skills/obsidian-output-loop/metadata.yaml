@@ -1,10 +1,11 @@
 name: obsidian-output-loop
 version: 1.0.0
-summary: "仅在用户明确调用时运行。"
-author: "unknown"
+summary: "只在用户明确调用时运行：考我/抽查 → 出题评判并改笔记；压缩 → 生成会话手册；记到 inbox → 追加到 00_Inbox；所有写入先给改动、确认后落盘。"
+author: "Mowendao"
 license: MIT
 tags:
   - skills
+  - obsidian
 status: beta
 requires: []
 platforms:

@@ -50,9 +50,9 @@ skills/<name>/
 |---|---|---|
 | [workspace-organizer](skills/workspace-organizer/) | 把杂乱的工作区按主题整理好，并留下迁移清单和回滚脚本 | ✅ stable |
 | [upload-skill-to-repo](skills/upload-skill-to-repo/) | 把一个已安装的 skill（按名字从 DSH 的 skill 根目录查找，默认全局 ~/.dsh/skills）上传到指... | 🧪 beta |
-| [collection-dedupe](skills/collection-dedupe/) | 把网页收藏夹/合集/列表页的条目导出成 CSV，解析出原名、社团、编号等字段并聚类判定\"同款\"，输出带分组、判定依据... | 🧪 beta |
-| [five-stage-learning](skills/five-stage-learning/) | 用斯科特·杨的五阶段（获取/理解/扩展/应用/纠错）带用户在 DSH 里学一个具体知识点：每阶段给出目标、步骤、可复制的... | 🧪 beta |
-| [obsidian-output-loop](skills/obsidian-output-loop/) | 仅在用户明确调用时运行。触发词：调用 obsidian-output-loop / 考我 / 抽查 → 出题评判改笔记；... | 🧪 beta |
+| [collection-dedupe](skills/collection-dedupe/) | 把收藏夹/合集/列表页的条目导出成 CSV，按原名与编号聚类判定「同款」，输出带分组与待核清单的 xlsx | 🧪 beta |
+| [five-stage-learning](skills/five-stage-learning/) | 用斯科特·杨的五阶段（获取/理解/扩展/应用/纠错）带用户学一个知识点，按出口条件而不是时间推进 | 🧪 beta |
+| [obsidian-output-loop](skills/obsidian-output-loop/) | Obsidian 输出回路：考我 → 出题评判改笔记、压缩 → 会话手册、记到 inbox，仅显式调用 | 🧪 beta |
 
 ### workspace-organizer
 

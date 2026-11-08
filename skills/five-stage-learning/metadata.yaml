@@ -1,10 +1,11 @@
 name: five-stage-learning
 version: 1.0.0
-summary: "用斯科特·杨的五阶段（获取/理解/扩展/应用/纠错）带用户在 DSH 里学一个具体知识点：每阶段给出目标、步骤、可复制的提问和出口条件；概念型知识用费曼讲解验证..."
-author: "unknown"
+summary: "用斯科特·杨的五阶段（获取/理解/扩展/应用/纠错）带用户学一个具体知识点：每阶段给出目标、步骤、可复制的提问和出口条件，按出口条件而不是时间推进。"
+author: "Mowendao"
 license: MIT
 tags:
   - skills
+  - learning
 status: beta
 requires: []
 platforms:
