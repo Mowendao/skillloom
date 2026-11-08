@@ -6,7 +6,7 @@
 把文件夹放进 agent 的 skills 目录，它就能在合适的时候按固定流程做事。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Skills](https://img.shields.io/badge/skills-2-blue.svg)](#包含哪些-skills)
+[![Skills](https://img.shields.io/badge/skills-3-blue.svg)](#包含哪些-skills)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#参与贡献)
 
 </div>
@@ -50,6 +50,7 @@ skills/<name>/
 |---|---|---|
 | [workspace-organizer](skills/workspace-organizer/) | 把杂乱的工作区按主题整理好，并留下迁移清单和回滚脚本 | ✅ stable |
 | [upload-skill-to-repo](skills/upload-skill-to-repo/) | 把一个已安装的 skill（按名字从 DSH 的 skill 根目录查找，默认全局 ~/.dsh/skills）上传到指... | 🧪 beta |
+| [collection-dedupe](skills/collection-dedupe/) | 把网页收藏夹/合集/列表页的条目导出成 CSV，解析出原名、社团、编号等字段并聚类判定\"同款\"，输出带分组、判定依据... | 🧪 beta |
 
 ### workspace-organizer
 
