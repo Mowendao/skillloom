@@ -180,8 +180,14 @@ function Get-Field([string]$frontmatter, [string]$key) {
         if ($line -match ('^{0}\s*:\s*(.*)$' -f [regex]::Escape($key))) {
             $v = $Matches[1].Trim()
             $v = $v -replace '\s+#.*$', ''
-            if ($v.Length -ge 2 -and (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'")))) {
+            if ($v.Length -ge 2 -and $v.StartsWith('"') -and $v.EndsWith('"')) {
                 $v = $v.Substring(1, $v.Length - 2)
+                # 双引号值里的 YAML 转义必须还原；否则 \" 会带着反斜杠进入生成的文档，
+                # 再被转义一次就成了 \\"，直接把 metadata.yaml 写成非法 YAML。
+                $v = $v.Replace('\"', '"').Replace('\\', '\').Replace('\n', ' ').Replace('\t', ' ')
+            }
+            elseif ($v.Length -ge 2 -and $v.StartsWith("'") -and $v.EndsWith("'")) {
+                $v = $v.Substring(1, $v.Length - 2).Replace("''", "'")
             }
             return $v.Trim()
         }
@@ -235,8 +241,18 @@ function Get-OneLine([string]$text, [int]$max = 120) {
     if (-not $text) { return '' }
     $line = ($text -split '\r?\n')[0].Trim()
     $line = $line -replace '^#+\s*', ''
+    # 表格单元格里的 | 必须转义，否则整行会被切列
+    $line = $line -replace '\|', '\|'
     if ($line.Length -gt $max) { $line = $line.Substring(0, $max) + '...' }
     return $line
+}
+
+# 生成 YAML 双引号字符串：先转义反斜杠，再转义双引号，保证结果可被 yaml 解析
+function ConvertTo-YamlString([string]$s) {
+    $e = ($s -replace '\s+', ' ').Trim()
+    $e = $e -replace '\\', '\\'
+    $e = $e -replace '"', '\"'
+    return '"' + $e + '"'
 }
 
 function Read-TextFile([string]$path) {
@@ -265,7 +281,7 @@ function Get-SkillSummaryMap([string]$repo, [string]$skillsDirName) {
     return $map
 }
 
-function Test-RepoConvention([string]$repo, [string]$skillsDirName, [string]$skillName) {
+function Test-RepoConvention([string]$repo, [string]$skillsDirName, [string]$skillName, [string]$sourceDir) {
     $root = Join-Path $repo $skillsDirName
     $siblings = @()
     if (Test-Path -LiteralPath $root) {
@@ -295,6 +311,13 @@ function Test-RepoConvention([string]$repo, [string]$skillsDirName, [string]$ski
     if (Test-Path -LiteralPath $targetDir) {
         $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $targetDir $_)) })
     }
+    # 源目录缺哪些仓库要求的文档 —— 新 skill 一个文档都没有时，
+    # 旧逻辑只查目标目录（还不存在），于是永远报 MissingDocs = {}，把「要生成三个文档」藏了起来。
+    $sourceMissing = @()
+    if ($sourceDir) {
+        $sourceMissing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $sourceDir $_)) })
+    }
+    $willGenerate = @(if (Test-Path -LiteralPath $targetDir) { $missing } else { $sourceMissing })
 
     $readme = Read-TextFile (Join-Path $repo 'README.md')
     $hasTable = $false
@@ -311,6 +334,7 @@ function Test-RepoConvention([string]$repo, [string]$skillsDirName, [string]$ski
     $issues = @()
     if ($siblings.Count -gt 0) {
         foreach ($m in $missing) { $issues += ('MISSING_' + $m) }
+        if ($sourceMissing.Count -gt 0) { $issues += 'SOURCE_MISSING_DOC' }
         if ($hasTable -and -not $rowExists) { $issues += 'ROOT_TABLE' }
         $rootCl = Join-Path $repo 'CHANGELOG.md'
         if (Test-Path -LiteralPath $rootCl) {
@@ -320,16 +344,18 @@ function Test-RepoConvention([string]$repo, [string]$skillsDirName, [string]$ski
     }
 
     return [pscustomobject]@{
-        SkillsDir    = $skillsDirName
-        SiblingCount = $siblings.Count
-        DocHits      = $hits
-        RequiredDocs = $required
-        MissingDocs  = $missing
-        HasRootReadme = [bool]$readme
-        HasTable     = $hasTable
-        RowExists    = $rowExists
-        BadgeCount   = $badgeCount
-        Issues       = $issues
+        SkillsDir       = $skillsDirName
+        SiblingCount    = $siblings.Count
+        DocHits         = $hits
+        RequiredDocs    = $required
+        MissingDocs     = $missing
+        SourceMissingDocs = $sourceMissing
+        WillGenerate    = $willGenerate
+        HasRootReadme   = [bool]$readme
+        HasTable        = $hasTable
+        RowExists       = $rowExists
+        BadgeCount      = $badgeCount
+        Issues          = $issues
     }
 }
 
@@ -338,17 +364,28 @@ function Get-SkillSummary([string]$description, [int]$max = 80) {
     $s = $description.Trim()
     $cut = [regex]::Split($s, '(?i)\bUse when\b|\bUse it when\b')
     if ($cut.Count -gt 0 -and $cut[0].Trim().Length -gt 0) { $s = $cut[0].Trim() }
-    $s = ($s -split '(?<=[。！？.!?])')[0].Trim()
-    if ($s.Length -gt $max) { $s = $s.Substring(0, $max) + '...' }
+    $sentences = @($s -split '(?<=[。！？.!?])' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    # 「仅在用户明确调用时运行。」这类元描述说明的是调用约束，不是 skill 干什么；
+    # 拿它当摘要会让整条描述信息归零，所以跳过它取下一句。
+    while ($sentences.Count -gt 1 -and $sentences[0] -match '^(仅在|只在|仅当)[^，。]{0,18}(时|才)') {
+        $sentences = @($sentences | Select-Object -Skip 1)
+    }
+    $s = if ($sentences.Count) { $sentences[0] } else { $s }
+    if ($s.Length -gt $max) {
+        # 尽量在标点处收口，避免出现「…验证...」这种半句
+        $soft = [regex]::Match($s.Substring(0, $max), '^.*(?=[：；，、])')
+        if ($soft.Success -and $soft.Value.Length -ge [int]($max / 2)) { $s = $soft.Value + '…' }
+        else { $s = $s.Substring(0, $max) + '...' }
+    }
     return $s
 }
 function New-MetaYaml([string]$skillName, [string]$description, [string]$author) {
     $summary = Get-SkillSummary $description
-    $esc = ($summary -replace '"', '\"') -replace '\s+', ' '
+    $esc = ConvertTo-YamlString $summary
     $body = 'name: ' + $skillName + "`n" +
     'version: 1.0.0' + "`n" +
-    'summary: "' + $esc + '"' + "`n" +
-    'author: "' + $author + '"' + "`n" +
+    'summary: ' + $esc + "`n" +
+    'author: "' + ($author -replace '"', '\"') + '"' + "`n" +
     'license: MIT' + "`n" +
     'tags:' + "`n" +
     '  - skills' + "`n" +
@@ -432,21 +469,79 @@ function Update-RootChangelog([string]$repo, [string]$skillName) {
     if (-not $text) { return @() }
     if ($text.Contains($skillName)) { return @() }
     $date = Get-Date -Format 'yyyy-MM-dd'
-    $entry = '### Added' + "`n`n" + '- ' + $skillName + ' skill (' + $date + ', 文档由 upload-skill-to-repo 按仓库规范补齐)' + "`n`n"
-    $i = [regex]::Match($text, '(?m)^## \[Unreleased\]')
-    if ($i.Success) {
-        $after = $i.Index + $i.Length
+    $bullet = '- ' + $skillName + ' skill (' + $date + ', 文档由 upload-skill-to-repo 按仓库规范补齐)'
+    $newBlock = '### Added' + "`n`n" + $bullet + "`n`n"
+
+    $unreleased = [regex]::Match($text, '(?m)^## \[Unreleased\]')
+    if ($unreleased.Success) {
+        $after = $unreleased.Index + $unreleased.Length
         $next = [regex]::Match($text.Substring($after), '(?m)^## \[')
-        $insertAt = if ($next.Success) { $after + $next.Index } else { $text.Length }
-        $text = $text.Substring(0, $insertAt) + $entry + $text.Substring($insertAt)
+        $sectionEnd = if ($next.Success) { $after + $next.Index } else { $text.Length }
+        $section = $text.Substring($after, $sectionEnd - $after)
+        # Unreleased 里已有 ### Added 时只追加一条，不再重复建标题（每次上传都建一个会堆成 4 个 ### Added）
+        $added = [regex]::Match($section, '(?m)^### Added[ \t]*$')
+        if ($added.Success) {
+            $blockStart = $after + $added.Index + $added.Length
+            $tail = $text.Substring($blockStart)
+            $blockEndRel = [regex]::Match($tail, '(?m)^#{2,} ')
+            $blockEnd = if ($blockEndRel.Success) { $blockStart + $blockEndRel.Index } else { $text.Length }
+            $block = $text.Substring($blockStart, $blockEnd - $blockStart)
+            $lastBullet = $null
+            foreach ($m in [regex]::Matches($block, '(?m)^- .*$')) { $lastBullet = $m }
+            if ($lastBullet) {
+                $insertAt = $blockStart + $lastBullet.Index + $lastBullet.Length
+                $text = $text.Substring(0, $insertAt) + "`n" + $bullet + $text.Substring($insertAt)
+                Write-TextFile $path $text
+                return @('unreleased-entry-appended')
+            }
+            $text = $text.Substring(0, $blockStart) + "`n" + $bullet + "`n" + $text.Substring($blockStart)
+            Write-TextFile $path $text
+            return @('unreleased-entry')
+        }
+        $text = $text.Substring(0, $sectionEnd) + $newBlock + $text.Substring($sectionEnd)
+        Write-TextFile $path $text
+        return @('unreleased-entry')
     }
-    else {
-        $first = [regex]::Match($text, '(?m)^## \[')
-        $insertAt = if ($first.Success) { $first.Index } else { $text.Length }
-        $text = $text.Substring(0, $insertAt) + $entry + $text.Substring($insertAt)
-    }
+    $first = [regex]::Match($text, '(?m)^## \[')
+    $insertAt = if ($first.Success) { $first.Index } else { $text.Length }
+    $text = $text.Substring(0, $insertAt) + $newBlock + $text.Substring($insertAt)
     Write-TextFile $path $text
     return @('unreleased-entry')
+}
+
+# 生成物自检：自动补的文档在提交前必须能被下游真正解析，否则等于把坏文件推给别人
+function Test-GeneratedDocs([string]$targetDir, [string]$skillName) {
+    $problems = @()
+    $readme = Join-Path $targetDir 'README.md'
+    $meta = Join-Path $targetDir 'metadata.yaml'
+    $cl = Join-Path $targetDir 'CHANGELOG.md'
+
+    if (Test-Path -LiteralPath $readme) {
+        $t = Read-TextFile $readme
+        if ($t -notmatch ('(?m)^#\s+' + [regex]::Escape($skillName))) { $problems += 'README 缺一级标题' }
+        if ($t -match '\\"') { $problems += 'README 含未还原的 \" 转义' }
+    }
+    if (Test-Path -LiteralPath $meta) {
+        $t = Read-TextFile $meta
+        if ($t -notmatch ('(?m)^name:\s*' + [regex]::Escape($skillName) + '\s*$')) { $problems += 'metadata 的 name 与目录不一致' }
+        if ($t -notmatch '(?m)^summary:\s*"(?:[^"\\]|\\.)*"\s*$') { $problems += 'metadata 的 summary 引号不配对（YAML 非法）' }
+        $py = Get-Command python -ErrorAction SilentlyContinue
+        if ($py) {
+            $ErrorActionPreference = 'Continue'
+            $pyOut = (& $py.Source -c "import sys,yaml;d=yaml.safe_load(open(sys.argv[1],encoding='utf-8'));print('ok' if isinstance(d,dict) and d.get('name') else 'bad')" $meta 2>&1 | Out-String)
+            $ErrorActionPreference = 'Stop'
+            if ($pyOut -notmatch '(?m)\bok\b') {
+                $lastLine = (($pyOut -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
+                $problems += ('metadata YAML 解析失败: ' + $lastLine)
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $cl) {
+        $t = Read-TextFile $cl
+        if ($t -notmatch '(?m)^##\s*\[') { $problems += 'CHANGELOG 缺版本标题' }
+        if (([regex]::Matches($t, '(?m)^### Added\s*$')).Count -gt 1) { $problems += 'CHANGELOG 有重复的 ### Added' }
+    }
+    return $problems
 }
 
 function Apply-RepoConvention([string]$repo, [string]$skillsDirName, [string]$skillName, [string]$description, [string]$author, [switch]$Auto) {
@@ -466,6 +561,10 @@ function Apply-RepoConvention([string]$repo, [string]$skillsDirName, [string]$sk
                 'CHANGELOG.md' { Add-SubChangelog (Join-Path $targetDir $f) '1.0.0' 'Initial release; docs generated to follow the repository convention.' }
             }
             $generated += $f
+        }
+        $problems = @(Test-GeneratedDocs $targetDir $skillName)
+        if ($problems.Count -gt 0) {
+            Fail ('自动生成的文档校验失败，已中止（未提交）：' + ($problems -join '; ') + '。请检查 SKILL.md frontmatter 里的 description 是否含未转义的引号')
         }
         $rootChanges += Update-RootReadme $repo $skillsDirName $skillName $description
         $rootChanges += Update-RootChangelog $repo $skillName
@@ -523,12 +622,43 @@ $repoUrl = $null
 try { $repoUrl = Resolve-RepoUrl $Repo } catch { Fail $_.Exception.Message }
 $script:Result.repo = $repoUrl
 
+# 仓库 owner：生成的 metadata.yaml 用它兜底 author，避免清一色 "unknown"
+$repoOwner = $null
+if ($repoUrl -match 'github\.com[:/](?<owner>[^/]+)/') { $repoOwner = $Matches['owner'] }
+
 if ([string]::IsNullOrWhiteSpace($Branch)) { Fail 'Branch 不能为空' }
 if ($Branch -match '\s' -or $Branch -match '[~^:?*\[\]\\]' -or $Branch.StartsWith('-')) { Fail "分支名不合法: $Branch" }
 Assert-RelativeRepoPath $DestDir
 $DestDir = ($DestDir -replace '\\', '/').Trim('/')
 if ($DestDir -eq '') { $DestDir = '.' }
 $allowOverwrite = $Force -or ($Mode -eq 'update')
+
+# ---------- git 输出处理 ----------
+# 把 git 的进度噪音滤掉，只留下能对症的几行；否则失败原因会变成一句「To https://...」
+function Get-GitErrorSummary([string]$raw) {
+    if (-not $raw) { return '' }
+    $noise = '^(To |Enumerating|Counting|Compressing|Writing objects|Total |remote: (Resolving|Compressing|Counting)|.*\|\s*\d+%|\s*\d+% )'
+    $keep = @($raw -split "`r?`n" | Where-Object { $_.Trim() -and $_ -notmatch $noise })
+    $key = @($keep | Where-Object { $_ -match '(?i)error|fatal|rejected|denied|authentication|refusing|not found|no such|hint:' })
+    $pick = if ($key.Count) { $key } else { @($keep | Select-Object -Last 3) }
+    return (($pick | Select-Object -First 6) -join "`n").Trim()
+}
+
+# schannel 在部分环境（受限沙箱 / 缺凭证库）里取不到 TLS 凭证；git 支持用环境变量注入配置，
+# 子进程会继承，所以切成 openssl 后端后，后续 clone/push 都不用再改命令行。
+function Enable-OpenSslBackend {
+    $env:GIT_CONFIG_COUNT = '1'
+    $env:GIT_CONFIG_KEY_0 = 'http.sslBackend'
+    $env:GIT_CONFIG_VALUE_0 = 'openssl'
+}
+
+function Invoke-GitProbe([string]$repoUrl) {
+    $ErrorActionPreference = 'Continue'
+    $out = (& git ls-remote --heads $repoUrl 2>&1 | Out-String)
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    return [pscustomobject]@{ Code = $code; Out = $out }
+}
 
 try {
     # ---------- 解析 skill 来源 ----------
@@ -667,15 +797,42 @@ try {
     $cloneDir = Join-Path $workDir 'repo'
     New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 
-    Write-Step "克隆目标仓库: $repoUrl"
     $isLocalRepo = (Test-Path -LiteralPath $repoUrl -PathType Container)
+
+    # ---------- 预检：先确认远程可达，再克隆，避免做完一堆解析才发现认证/网络不通 ----------
+    if (-not $isLocalRepo) {
+        Write-Step '预检：远程可达性 / TLS / 读取权限'
+        $probe = Invoke-GitProbe $repoUrl
+        if ($probe.Code -ne 0 -and $probe.Out -match '(?i)schannel|SEC_E_NO_CREDENTIALS|AcquireCredentialsHandle') {
+            Write-Warn2 'TLS 后端 schannel 不可用（取不到证书凭证），改用 openssl 重试'
+            Enable-OpenSslBackend
+            $probe = Invoke-GitProbe $repoUrl
+            if ($probe.Code -eq 0) { Write-Ok 'openssl 后端可用（已通过 GIT_CONFIG_* 注入，后续 clone/push 复用）' }
+        }
+        if ($probe.Code -ne 0) {
+            $hint = '常见原因：代理未开 / 断网 / 仓库不存在 / 无读权限 / 私有仓库未登录'
+            if ($probe.Out -match 'sh\.exe|signal pipe|fatal error - couldn') {
+                $hint = 'git 子进程被运行环境限制（sh.exe / signal pipe 失败）：在 DSH 沙箱里通常需要一次 danger-full-access 授权，或在普通终端执行'
+            }
+            elseif ($probe.Out -match '(?i)could not read Username|Authentication failed|terminal prompts disabled') {
+                $hint = '缺少 git 凭据：先 gh auth login，或让 credential helper 能读到已保存的 GitHub 凭据'
+            }
+            Fail ("远程预检失败（尚未克隆、未改动任何文件）`n{0}`n提示: {1}" -f (Get-GitErrorSummary $probe.Out), $hint)
+        }
+        Write-Ok '远程可达，TLS 正常'
+    }
+
+    Write-Step "克隆目标仓库: $repoUrl"
     if ($isLocalRepo) {
         Copy-Item -LiteralPath $repoUrl -Destination $cloneDir -Recurse -Force
     }
     else {
-        $cloneOut = & git clone --quiet $repoUrl $cloneDir 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) {
-            Fail ("克隆失败。常见原因：无网络/代理未开、仓库不存在、无读权限、私有仓库未登录；若报 sh.exe / signal pipe 一类错误，通常是运行环境限制了 git 子进程，请改在普通终端执行。`n{0}" -f $cloneOut.Trim())
+        $ErrorActionPreference = 'Continue'
+        $cloneOut = (& git clone --quiet $repoUrl $cloneDir 2>&1 | Out-String)
+        $cloneCode = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($cloneCode -ne 0) {
+            Fail ("克隆失败`n{0}" -f (Get-GitErrorSummary $cloneOut))
         }
     }
     $ErrorActionPreference = 'Continue'
@@ -683,7 +840,7 @@ try {
     $ErrorActionPreference = 'Stop'
     if (-not $remoteHead) { $remoteHead = (& git -C $cloneDir symbolic-ref --short HEAD 2>$null | Out-String).Trim() }
     if ($remoteHead -match '^origin/(.+)$') { $defaultBranch = $Matches[1] } else { $defaultBranch = 'main' }
-    $hasOrigin = ((& git -C $cloneDir remote 2>&1 | Out-String) -match '(?m)^origin$')
+    $hasOrigin = (((& git -C $cloneDir remote 2>&1 | Out-String) -replace "`r", '') -match '(?m)^origin$')
     $localExists = ((& git -C $cloneDir branch --list $Branch 2>&1 | Out-String).Trim() -ne '')
     $branchExists = $false
     if ($hasOrigin) {
@@ -714,19 +871,21 @@ try {
     $conv = $null
     if ($CheckRepo -or -not $NoConvention) {
         Write-Step '检查仓库规范'
-        $conv = Test-RepoConvention $cloneDir $DestDir $skillName
+        $conv = Test-RepoConvention $cloneDir $DestDir $skillName $srcRoot
         if ($conv.Issues.Count -eq 0) { Write-Ok '已符合仓库规范' }
         else { Write-Warn2 ('规范缺口: ' + ($conv.Issues -join ', ')) }
         if ($CheckRepo) {
             $script:Result.convention = $conv
             $script:Result.status = 'repo-check'
+            if ($conv.WillGenerate.Count -gt 0) { Write-Note ('将要生成: ' + ($conv.WillGenerate -join ', ')) }
             if ($Json) { $script:Result | ConvertTo-Json -Depth 6 } else { $conv | Format-List | Out-String | Write-Host }
             return
         }
         if (-not $NoConvention) {
-            $authorBase = if ($AuthorName) { $AuthorName } else { 'unknown' }
+            $authorBase = if ($AuthorName) { $AuthorName } elseif ($repoOwner) { $repoOwner } else { 'unknown' }
             $script:Result.convention = $conv
-            Write-Note ('待补齐: ' + $(if ($conv.MissingDocs.Count) { $conv.MissingDocs -join ', ' } else { '根 README / CHANGELOG' }))
+            $toFill = @($conv.MissingDocs) + @($conv.SourceMissingDocs) | Select-Object -Unique
+            Write-Note ('待补齐: ' + $(if (@($toFill).Count) { @($toFill) -join ', ' } else { '根 README / CHANGELOG' }))
         }
     }
     if ($conv -and -not $NoConvention) {
@@ -794,16 +953,34 @@ try {
         $script:Result.commit = $sha
         Write-Ok "已提交: $sha  $CommitMessage"
 
-        $ErrorActionPreference = 'Stop'
         Write-Step "推送到 origin/$Branch"
         $pushArgs = @('-C', $cloneDir, 'push', '--set-upstream', 'origin', "HEAD:refs/heads/$Branch")
         if ($Force -and $branchExists) { $pushArgs += '--force-with-lease' }
-        $pushOut = & git @pushArgs 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) {
-            Fail ("推送失败（未登录、无写权限、分支保护或网络问题）:`n{0}" -f $pushOut.Trim())
+        $ErrorActionPreference = 'Continue'
+        $pushOut = (& git @pushArgs 2>&1 | Out-String)
+        $pushCode = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        $headSha = (& git -C $cloneDir rev-parse HEAD | Out-String).Trim()
+        $remoteSha = ''
+        if ($hasOrigin) {
+            $ErrorActionPreference = 'Continue'
+            $remoteSha = (& git -C $cloneDir ls-remote origin "refs/heads/$Branch" 2>$null | Out-String).Trim()
+            $ErrorActionPreference = 'Stop'
+        }
+        # 判定标准是「远端分支是否已经包含本次提交」，不是 git 的退出码：
+        # git push 一定往 stderr 写进度，旧版在 EAP=Stop 下会把它当成异常，推送成功也报失败。
+        $remoteHit = [bool]($headSha -and $remoteSha -match ('^' + [regex]::Escape($headSha)))
+        if ($pushCode -ne 0 -and -not $remoteHit) {
+            Fail ("推送失败（未登录、无写权限、分支保护或网络问题）`n{0}" -f (Get-GitErrorSummary $pushOut))
+        }
+        if ($pushCode -ne 0 -and $remoteHit) {
+            Write-Warn2 'git push 返回非零，但远端分支已指向本次提交，按成功处理'
+        }
+        elseif ($pushCode -eq 0 -and -not $remoteHit) {
+            Write-Warn2 '推送命令成功，但未能核验远端 ref（可稍后 git ls-remote 复查）'
         }
         $script:Result.pushed = $true
-        Write-Ok "推送成功: $Branch"
+        Write-Ok ("推送成功: {0}（远端 {1}）" -f $Branch, $headSha.Substring(0, 7))
 
         $webUrl = $repoUrl -replace '\.git$', ''
         if ($webUrl -match '^git@([^:]+):(.+)$') { $webUrl = "https://$($Matches[1])/$($Matches[2])" }
@@ -823,8 +1000,17 @@ catch {
 }
 finally {
     $wd = Get-Variable -Name workDir -ErrorAction SilentlyContinue
-    if (-not $KeepClone -and $wd -and $wd.Value -and (Test-Path -LiteralPath $wd.Value)) {
-        Remove-Item -LiteralPath $wd.Value -Recurse -Force -ErrorAction SilentlyContinue
+    if ($wd -and $wd.Value -and (Test-Path -LiteralPath $wd.Value)) {
+        if ($KeepClone -or $script:Result.status -eq 'failed') {
+            # 失败时保留克隆：本地 commit、生成物、git 输出都在里面，重试或排查都用得上
+            if ($script:Result.status -eq 'failed') {
+                $script:Result.warnings += "已保留临时克隆便于排查: $($wd.Value)"
+                if (-not $Json) { Write-Host ("  ..  已保留临时克隆便于排查: {0}" -f $wd.Value) -ForegroundColor DarkGray }
+            }
+        }
+        else {
+            Remove-Item -LiteralPath $wd.Value -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 

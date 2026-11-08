@@ -56,6 +56,15 @@ whenToUse: 用户说"把 <skill名> 传到 <仓库>" / "发布到 GitHub" / "推
 | 目录与命名 | `<DestDir>/<kebab-case>/` | 按 frontmatter `name` 落位 |
 | 提交信息 | 仓库历史里 `feat(skill): ...` 的写法 | 默认 `feat(skill): add\|update <name>` |
 
+`-CheckRepo` 除了 `MissingDocs`（仓库里旧版缺的文档），还会报两组新字段：
+
+- `SourceMissingDocs`：源 skill 缺哪些仓库要求的文档（即将生成）；
+- `WillGenerate`：本次实际会生成哪些。
+
+生成后立刻自检：`metadata.yaml` 能被 YAML 解析、`summary` 引号成对、README 无 `\"` 残留、`CHANGELOG` 段内不重复 `### Added`。任一项不过就中止提交，不会把坏文件推上去。
+
+生成的 `metadata.yaml` 里 `author` 依次回退：`-AuthorName` → 仓库 owner（从 Repo 解析）→ `unknown`。
+
 **自动补的只是文档层，不碰 `SKILL.md` 和 `scripts/`。** 生成内容带标记（README 首行 `> 模板: upload-skill-to-repo`）。提交前会打印"自动生成: ..."，请把这行复述给用户并提醒他审阅。
 
 三个开关：
@@ -69,10 +78,15 @@ whenToUse: 用户说"把 <skill名> 传到 <仓库>" / "发布到 GitHub" / "推
 `-CheckRepo` 报告示例：
 
 ```text
-Issues        : {MISSING_README.md, MISSING_metadata.yaml, ROOT_TABLE, ROOT_CHANGELOG}
-MissingDocs   : {README.md, metadata.yaml}
-RowExists     : False
-BadgeCount    : 1
+SkillsDir         : skills
+SiblingCount      : 2
+RequiredDocs      : {README.md, metadata.yaml, CHANGELOG.md}
+MissingDocs       : {}
+SourceMissingDocs : {README.md, metadata.yaml, CHANGELOG.md}
+WillGenerate      : {README.md, metadata.yaml, CHANGELOG.md}
+RowExists         : False
+BadgeCount        : 2
+Issues            : {SOURCE_MISSING_DOC, ROOT_TABLE, ROOT_CHANGELOG}
 ```
 
 ## 执行步骤
@@ -112,8 +126,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<本 skill 目录>\scripts\
 
 ### 5. 汇报
 
-必须包含：定位到的 skill（来源根 + 路径）、规范检查结果、**自动生成了哪些文件**、根 README/CHANGELOG 改了什么、仓库内路径、提交 SHA、可打开的链接。
-失败时按下表说明原因，不要只说"失败了"。
+必须包含：定位到的 skill（来源根 + 路径）、规范检查结果、**自动生成了哪些文件**、生成物自检是否通过、根 README/CHANGELOG 改了什么、仓库内路径、提交 SHA、可打开的链接。
+失败时按下表说明原因，不要只说"失败了"；如果是推送失败，先确认远端 ref 有没有真的更新（脚本已按远端判定，仍失败多半是权限或分支保护）。
 
 ## 脚本做了什么
 
@@ -122,11 +136,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<本 skill 目录>\scripts\
 1. **定位 skill**：四个根按优先级扫描，匹配文件夹名或 frontmatter `name`；找不到列全部可用项。
 2. **格式校验**：frontmatter 必须存在；`name` 小写 kebab-case；`description` 必填；拒绝 `disableModelInvocation` / `modelInvocable` / `userInvocable`。
 3. **安全检查**：排除 `.git`、`node_modules`、`__pycache__`、`dist`、`build`；>2MB 警告、>20MB 拒绝；扫 `ghp_`、`github_pat_`、`sk-`、`AKIA`、`xox[baprs]-`、私钥头；有 `.env` 拒绝。
-4. **克隆**：临时目录 `%TEMP%\dsh-upload-skill`（`-WorkDir` 可改；本地路径直接复制）。
-5. **读规范 + 补文档**：见上节。
-6. **写入与提交**：复制到 `<DestDir>/<name>/`；只 add 目标目录和根 README/CHANGELOG。
-7. **推送**：`git push --set-upstream origin HEAD:refs/heads/<Branch>`。
-8. **清理**：删除临时克隆（`-KeepClone` 保留，便于检查）。
+4. **远程预检**（不克隆就失败，什么都不改）：`git ls-remote` 探测可达性；遇 `schannel` / `SEC_E_NO_CREDENTIALS` 自动切 `http.sslBackend=openssl` 重试；仍失败就给出"代理 / 凭据 / 沙箱权限"三条对症提示。
+5. **克隆**：临时目录 `%TEMP%\dsh-upload-skill`（`-WorkDir` 可改；本地路径直接复制）。
+6. **读规范 + 补文档 + 自检**：见上节；生成物校验不过就中止。
+7. **写入与提交**：复制到 `<DestDir>/<name>/`；只 add 目标目录和根 README/CHANGELOG。
+8. **推送**：`git push --set-upstream origin HEAD:refs/heads/<Branch>`。成功与否**以远端 ref 是否包含本次 commit 为准**，不看 git 退出码（git 一定往 stderr 写进度，PowerShell 5.1 在 `EAP=Stop` 下会把它当异常，导致推送成功也报失败）。
+9. **清理**：成功后删临时克隆；失败或 `-KeepClone` 时保留，并打印路径便于排查。
 
 ## 失败处理
 
@@ -134,21 +149,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<本 skill 目录>\scripts\
 |---|---|---|
 | `本机没有名为 ... 的已安装 skill` | 名字不对或没装 | 先 `-ShowList` 对名字 |
 | `规范缺口: MISSING_...` | 仓库要求而 skill 缺文档 | 默认自动补；不想补加 `-NoConvention` |
+| `自动生成的文档校验失败` | `description` 里有未配对的引号，生成的 YAML 非法 | 改 SKILL.md frontmatter 的 `description`，别手改生成物 |
 | `自动生成: ...` 后提交失败 | 多为 git 身份或网络 | 看下一行具体报错 |
 | `拒绝上传 upload-skill-to-repo 自身` | 自保护 | 加 `-LocalPath` 指向本目录 |
-| `克隆失败` + 网络 | 代理/断网 | 开代理；或先手工 clone |
-| `克隆失败` + `sh.exe`/`signal pipe` | 环境限制 git 子进程 | 改普通终端 |
+| `远程预检失败` + 网络 | 代理/断网 | 开代理；预检在克隆前，不会留下半成品 |
+| `schannel` / `SEC_E_NO_CREDENTIALS` | Windows schannel 取不到 TLS 凭证 | 脚本已自动切 `http.sslBackend=openssl`；若仍失败，手工 `git config --global http.sslBackend openssl` |
+| `sh.exe` / `signal pipe` | 运行环境禁止 git 子进程建命名管道（也是凭据 helper 失效的原因） | 在 DSH 沙箱里需要一次 danger-full-access 授权，或在普通终端执行 |
 | `Authentication failed` | 私有仓库未登录 | `gh auth login`；不要贴 token |
 | `protected branch` | 分支保护 | 换分支 |
 | `仓库中已存在 ...` | 目标同名 | 确认后 `-Mode update` |
 | `git commit 失败` | 缺 `user.name`/`user.email` | 加 `-AuthorName`/`-AuthorEmail` |
 | `疑似机密内容` | 命中 token/私钥 | 删除或改占位符 |
+| 失败后想接着查 | 克隆默认保留 | 按输出的路径进 `repo/` 看生成物和 `git log` |
 
 ## 硬性约束
 
 1. **只收两个参数**：仓库名 + skill 名；skill 没装就明说，不拿别的目录凑数。
-2. **自动补的只是文档**，不改 `SKILL.md`、不删脚本；生成内容要提醒用户审阅。
+2. **自动补的只是文档**，不改 `SKILL.md`、不删脚本；生成内容要提醒用户审阅，且必须过自检才提交。
 3. **先 CheckRepo/DryRun 再真推**；用户没明确说"推"时不做推送。
 4. **只 add 目标目录和根 README/CHANGELOG**，不裹挟仓库其他改动。
 5. **不外泄凭据**；**不静默改内容**：校验失败就报错。
 6. **同名多根按优先级取用并告知**。
+7. **以远端 ref 判定推送结果**，不把 git 的 stderr 进度当成失败；失败时保留临时克隆。

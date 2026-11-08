@@ -1,12 +1,14 @@
 name: upload-skill-to-repo
-version: 1.0.0
-summary: "把一个已安装的 skill（按名字从 DSH 的 skill 根目录查找，默认全局 ~/."
+version: 1.1.0
+summary: "把一个已安装的 skill（按名字从 DSH 的 skill 根目录查找，默认全局 ~/.dsh/skills）上传到指定 Git 仓库的分支，上传前自动读取仓库规范并补齐文档。"
 author: "Mowendao"
 license: MIT
 tags:
   - skills
-status: beta
-requires: []
+  - git
+status: stable
+requires:
+  - git
 platforms:
   - windows
   - macos
