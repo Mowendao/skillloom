@@ -1,0 +1,15 @@
+name: obsidian-output-loop
+version: 1.0.0
+summary: "仅在用户明确调用时运行。"
+author: "unknown"
+license: MIT
+tags:
+  - skills
+status: beta
+requires: []
+platforms:
+  - windows
+  - macos
+  - linux
+entrypoint: SKILL.md
+source: ""

@@ -16,6 +16,10 @@ All notable changes to this repository are documented here.
 
 - five-stage-learning skill (2026-11-08, 文档由 upload-skill-to-repo 按仓库规范补齐)
 
+### Added
+
+- obsidian-output-loop skill (2026-11-08, 文档由 upload-skill-to-repo 按仓库规范补齐)
+
 ## [0.1.0] - 2026-11-04
 
 ### Added
